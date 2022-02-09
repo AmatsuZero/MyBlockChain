@@ -28,55 +28,64 @@ type Block struct {
 	PrevHash string
 }
 
-type Message struct {
-	BPM int
-}
-
-func (block *Block) generateBlock(BPM int) (Block, error) {
-	var newBlock Block
-
-	t := time.Now()
-
-	newBlock.Index = block.Index + 1
-	newBlock.Timestamp = t.String()
-	newBlock.BPM = BPM
-	newBlock.PrevHash = block.Hash
-	newBlock.Hash = calculateHash(newBlock)
-
-	return newBlock, nil
-}
-
-// Blockchain is a series of validated Blocks
-var Blockchain []Block
-
-func calculateHash(block Block) string {
-	record := string(rune(block.Index)) + block.Timestamp + string(rune(block.BPM)) + block.PrevHash
+func (b *Block) calculateHash() string {
+	record := string(rune(b.Index)) + b.Timestamp + string(rune(b.BPM)) + b.PrevHash
 	h := sha256.New()
 	h.Write([]byte(record))
 	hashed := h.Sum(nil)
 	return hex.EncodeToString(hashed)
 }
 
-func isBlockValid(newBlock, oldBlock Block) bool {
+type Message struct {
+	BPM int
+}
+
+// Blockchain is a series of validated Blocks
+type Blockchain struct {
+	blockChain []Block
+}
+
+var blockChain Blockchain
+
+func (bc *Blockchain) lastBlock() Block {
+	return bc.blockChain[len(bc.blockChain)-1]
+}
+
+func (bc *Blockchain) isBlockValid(newBlock Block) bool {
+	oldBlock := bc.lastBlock()
 	if oldBlock.Index+1 != newBlock.Index {
 		return false
 	}
-
 	if oldBlock.Hash != newBlock.PrevHash {
 		return false
 	}
-
-	if calculateHash(newBlock) != newBlock.Hash {
+	if newBlock.calculateHash() != newBlock.Hash {
 		return false
 	}
-
 	return true
 }
+func (bc *Blockchain) append(block Block) {
+	bc.blockChain = append(bc.blockChain, block)
+}
 
-func replaceChain(newBlocks []Block) {
-	if len(newBlocks) > len(Blockchain) {
-		Blockchain = newBlocks
+func (bc *Blockchain) replaceChain(newBlocks []Block) {
+	if len(newBlocks) > len(bc.blockChain) {
+		bc.blockChain = newBlocks
 	}
+}
+
+func (bc *Blockchain) generateBlock(BPM int) (Block, error) {
+	var newBlock Block
+	block := bc.lastBlock()
+
+	t := time.Now()
+	newBlock.Index = block.Index + 1
+	newBlock.Timestamp = t.String()
+	newBlock.BPM = BPM
+	newBlock.PrevHash = block.Hash
+	newBlock.Hash = newBlock.calculateHash()
+
+	return newBlock, nil
 }
 
 func respondWithJSON(w http.ResponseWriter, r *http.Request, code int, payload interface{}) {
@@ -91,7 +100,7 @@ func respondWithJSON(w http.ResponseWriter, r *http.Request, code int, payload i
 }
 
 func handleGetBlockchain(w http.ResponseWriter, r *http.Request) {
-	bytes, err := json.MarshalIndent(Blockchain, "", "  ")
+	bytes, err := json.MarshalIndent(blockChain.blockChain, "", "  ")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -101,26 +110,23 @@ func handleGetBlockchain(w http.ResponseWriter, r *http.Request) {
 
 func handleWriteBlock(w http.ResponseWriter, r *http.Request) {
 	var m Message
-
 	decoder := json.NewDecoder(r.Body)
 	if err := decoder.Decode(&m); err != nil {
 		respondWithJSON(w, r, http.StatusBadRequest, r.Body)
 		return
 	}
 	defer r.Body.Close()
-	newBlock, err := Blockchain[len(Blockchain)-1].generateBlock(m.BPM)
+	newBlock, err := blockChain.generateBlock(m.BPM)
 	if err != nil {
 		respondWithJSON(w, r, http.StatusInternalServerError, m)
 		return
 	}
-	if isBlockValid(newBlock, Blockchain[len(Blockchain)-1]) {
-		newBlockchain := append(Blockchain, newBlock)
-		replaceChain(newBlockchain)
-		spew.Dump(Blockchain)
+	if blockChain.isBlockValid(newBlock) {
+		newBlockchain := append(blockChain.blockChain, newBlock)
+		blockChain.replaceChain(newBlockchain)
+		spew.Dump(blockChain)
 	}
-
 	respondWithJSON(w, r, http.StatusCreated, newBlock)
-
 }
 
 func makeMuxRouter() http.Handler {
@@ -154,12 +160,12 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-
 	go func() {
 		t := time.Now()
 		genesisBlock := Block{0, t.String(), 0, "", ""}
+		genesisBlock.Hash = genesisBlock.calculateHash()
 		spew.Dump(genesisBlock)
-		Blockchain = append(Blockchain, genesisBlock)
+		blockChain.append(genesisBlock)
 	}()
 	log.Fatal(run())
 }
